@@ -6,29 +6,34 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_addons as tfa
 from tensorflow.keras.losses import MeanSquaredError
+from shared_utils import gaussian_noise_layer,add_noise
 
 from dncnn import DnCNN
 from dncnnrn import DnCNNRN
-
+print("loaded modules")
+# %%
 parser = argparse.ArgumentParser(description='DnCNN tf2')
 parser.add_argument('--model', default='DnCNN', choices=['DnCNN', 'DnCNNRN'], type=str, help='choose a type of model')
-parser.add_argument('--batch_size', default=64, type=int, help='batch size')
-parser.add_argument('--train_data', default='data/train', type=str, help='path of train data')
-parser.add_argument('--test_data', default='data/test', type=str, help='path of test data')
-parser.add_argument('--sigma', default=25, type=int, help='noise level')
-parser.add_argument('--epochs', default=500, type=int, help='number of train epochs')
-parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
+parser.add_argument('--batch_size', default=16, type=int, help='batch size')
+parser.add_argument('--train_data', default='/home/andrea/denoiser/BSR/BSDS500/data/images/train', type=str, help='path of train data')
+parser.add_argument('--test_data', default='/home/andrea/denoiser/BSR/BSDS500/data/images/test', type=str, help='path of test data')
+parser.add_argument('--sigma', default=55, type=int, help='noise level (max level for blind mode)')
+parser.add_argument('--form', default='GAUSS', choices=['GAUSS', 'RICE'], type=str, help='choose a noise form')
+parser.add_argument('--blind', default=True, type=bool, help='blind denoising')
+parser.add_argument('--epochs', default=300, type=int, help='number of train epochs')
+parser.add_argument('--lr', default=0.0005, type=float, help='learning rate')
 parser.add_argument('--wd', default=0.0001, type=float, help='weight decay')
-parser.add_argument('--depth', default=17, type=int, help='depth of the model')
-parser.add_argument('--train_patch', default=40, type=int, help='size for training patches')
+parser.add_argument('--depth', default=20, type=int, help='depth of the model')
+parser.add_argument('--train_patch', default=50, type=int, help='size for training patches')
 parser.add_argument('--test_size', default=180, type=int, help='size for test images')
 parser.add_argument('--format', default='jpg', choices=['jpg', 'png'], type=str, help='image format')
-parser.add_argument('--weights_path', default='weights/vgg', type=str, help='path for saving model weights')
-parser.add_argument('--model_path', default='saved_models/vgg', type=str, help='path for saving whole model')
-parser.add_argument('--exp_name', default='vgg', type=str, help='name for experiment logs')
+parser.add_argument('--weights_path', default='weights/gauss_test', type=str, help='path for saving model weights')
+parser.add_argument('--model_path', default='saved_models/gauss_test', type=str, help='path for saving whole model')
+parser.add_argument('--exp_name', default='test', type=str, help='name for experiment logs')
 
 args = parser.parse_args()
-
+print("parsed options")
+# %%
 AUTOTUNE = tf.data.experimental.AUTOTUNE  # for dataset configuration
 
 # Training variables
@@ -43,6 +48,8 @@ DEPTH = args.depth
 
 # Data preparation variables
 NOISE_STD = args.sigma
+BLIND_MODE = args.blind
+NOISE_FORM = args.form
 SCALES = [1, 0.9, 0.8, 0.7]  # used for data augmentation
 TRAIN_PATCH_DIM = args.train_patch
 TEST_DIM = args.test_size
@@ -58,13 +65,15 @@ MODEL_PATH = args.model_path
 
 # Tensorboard logs name
 EXPERIMENT_NAME = args.exp_name
-
-
-def gaussian_noise_layer(dim):
-    '''generate noise mask of given dimension'''
-    std = NOISE_STD  # random.randint(0, 55) for blind denoising
-    noise = tf.random.normal(shape=[dim, dim, 1], mean=0.0, stddev=std, dtype=tf.float32) / 255.0
-    return noise
+print("set dirs")
+# %%
+# def gaussian_noise_layer(dim):
+#     '''generate noise mask of given dimension'''
+#     std = NOISE_STD  # random.randint(0, 55) for blind denoising
+#     if BLIND_MODE:
+#         std = random.randint(0, NOISE_STD) #for blind denoising
+#     noise = tf.random.normal(shape=[dim, dim, 1], mean=0.0, stddev=std, dtype=tf.float32) / 255.0
+#     return noise
 
 
 def augment(image):
@@ -92,11 +101,19 @@ def augment(image):
     for i in range(np.random.randint(4)):
         image = tf.image.rot90(image)
 
-    # generate noise mask
-    noise = gaussian_noise_layer(TRAIN_PATCH_DIM)
+    # # generate noise mask
+    # noise = gaussian_noise_layer(TRAIN_PATCH_DIM)
 
-    # sum image and noise, clip values between 0 and 1
-    noisy_image = tf.clip_by_value(image + noise, 0, 1)
+    # # sum image and noise, clip values between 0 and 1
+    # noisy_image = tf.clip_by_value(image + noise, 0, 1)
+    
+    
+    std = NOISE_STD  # random.randint(0, 55) for blind denoising
+    if BLIND_MODE:
+        std = random.randint(25, NOISE_STD) #for blind denoising
+    
+    noisy_image = add_noise(image,TRAIN_PATCH_DIM,NOISE_FORM,std)
+
 
     return noisy_image, image
 
@@ -121,11 +138,14 @@ def augment_test(image):
         image = tf.image.decode_jpeg(image, channels=1)
     elif FORMAT == 'png':
         image = tf.image.decode_png(image, channels=1)
-
-    image = tf.image.resize_with_crop_or_pad(image, 180, 180)
+    
+    image = tf.image.resize_with_crop_or_pad(image, TEST_DIM, TEST_DIM)
     image = tf.image.convert_image_dtype(image, tf.float32)
-    noise = gaussian_noise_layer(180)
-    noisy_image = tf.clip_by_value(image + noise, 0, 1)
+    
+    std = NOISE_STD  # random.randint(0, 55) for blind denoising
+    if BLIND_MODE:
+        std = random.randint(25, NOISE_STD) #for blind denoising
+    noisy_image = add_noise(image,TEST_DIM,NOISE_FORM,std)
 
     return noisy_image, image
 
@@ -175,7 +195,7 @@ train_ds = tf.data.Dataset.list_files(TRAIN_DIR)
 train_ds = configure_for_train(train_ds)
 test_ds = tf.data.Dataset.list_files(TEST_DIR)
 test_ds = configure_for_test(test_ds)
-
+print("load data")
 # define model, loss function and optimizer
 if MODEL == 'DnCNN':
     model = DnCNN(depth=DEPTH)
@@ -197,6 +217,7 @@ log_dir = 'logs/' + current_time + '_' + EXPERIMENT_NAME
 summary_writer = tf.summary.create_file_writer(log_dir)
 
 for epoch in range(EPOCHS):
+    print("On epoch %d / %d" % (epoch,EPOCHS))
     # Reset the metrics at the start of the next epoch
     train_loss.reset_states()
     train_metric.reset_states()
@@ -212,6 +233,7 @@ for epoch in range(EPOCHS):
         test_step(test_images, test_targets)
 
     # log losses and metrics
+    
     with summary_writer.as_default():
         tf.summary.scalar('train_loss', train_loss.result(), step=epoch)
         tf.summary.scalar('train_psnr', train_metric.result(), step=epoch)
