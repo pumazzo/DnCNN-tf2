@@ -2,6 +2,7 @@ import argparse
 import os
 
 import numpy as np
+import pandas as pd
 import math
 import pickle
 import matplotlib.pyplot as plt
@@ -15,20 +16,24 @@ from shared_utils import gaussian_noise_layer,add_noise
 parser = argparse.ArgumentParser(description='DnCNN tf2 test')
 parser.add_argument('--model', default='DnCNN', choices=['DnCNN', 'DnCNNRN'], type=str, help='choose a type of model')
 parser.add_argument('--data_dir', default='data/set12', type=str, help='path of test data')
-parser.add_argument('--sigma', default=50, type=int, help='noise level')
-parser.add_argument('--form', default='GAUSS', choices=['GAUSS', 'RICE'], type=str, help='choose a noise form')
+parser.add_argument('--sigma', default=35, type=int, help='noise level')
+parser.add_argument('--form', default='RICE', choices=['GAUSS', 'RICE'], type=str, help='choose a noise form')
 parser.add_argument('--depth', default=20, type=int, help='depth of the model')
 parser.add_argument('--test_size', default=180, type=int, help='size for test images')
 parser.add_argument('--batch_size', default=12, type=int, help='batch size')
 parser.add_argument('--format', default='png', choices=['jpg', 'png'], type=str, help='image format')
-parser.add_argument('--weights_path', default='weights/gauss_test', type=str, help='path for loading model weights')
+parser.add_argument('--weights_path', default='weights/rice_20_test', type=str, help='path for loading model weights')
 parser.add_argument('--save_plots', action='store_true', help='save plots in plots_dir')
-parser.add_argument('--plots_dir', default='plots', type=str, help='path for saving plots')
+parser.add_argument('--plots_dir', default='plots/rice', type=str, help='path for saving plots')
 
 args = parser.parse_args()
 
 AUTOTUNE = tf.data.experimental.AUTOTUNE  # for dataset configuration
+#TODO: load from train 
+# with open(MODEL_PATH+'/commandline_args.txt', 'r') as f:
+#     args.__dict__ = json.load(f)
 
+# print(args)
 # Network parameters
 MODEL = args.model
 DEPTH = args.depth
@@ -184,8 +189,10 @@ if STORE_AVERAGE:
     psnr_noise = []
     psnr_processed = []
     psnr_wien = []
+    scatter_x_ypred=np.zeros([len(range(35,60)), 12,2  ])
+    scatter_wiener_ypred=np.zeros([len(range(35,60)), 12,2  ])
     
-    for j in range(25,60):
+    for idx, j in enumerate(range(35,60)):
         NOISE_STD = j
         std_array.append(NOISE_STD)
         test_ds = configure_ds(test_ds_list,NOISE_STD)
@@ -202,9 +209,99 @@ if STORE_AVERAGE:
             psnr_noise.append(psnr(noisy, orig))
             psnr_processed.append(psnr(processed, orig))
             psnr_wien.append(psnr(wien, orig))
-            
+            scatter_x_ypred[idx,i,]=[psnr(noisy, orig),psnr(processed, orig)]
+            scatter_wiener_ypred[idx,i,]=[psnr(wien, orig),psnr(processed, orig)]
         noisy_arr.append(np.mean(psnr_noise))
         base_arr.append(np.mean(psnr_wien))
         net_arr.append(np.mean(psnr_processed))
         
+        
+    #plotting
+# %%
+if STORE_AVERAGE:
+    
+    #np.random.seed(1974)
+    
+    # Generate Data
+   
+    x=np.ndarray.flatten( scatter_x_ypred[:,:,0])
+    y=np.ndarray.flatten( scatter_x_ypred[:,:,1])
+    labels = np.ndarray.flatten(np.array([range(12),]*25).transpose())
+    df = pd.DataFrame(dict(x=x, y=y, label=labels))
+    
+    groups = df.groupby('label')
+    
+    # Plot
+    fig, ax = plt.subplots()
+    ax.margins(0.05) # Optional, just adds 5% padding to the autoscaling
+    for name, group in groups:
+        ax.plot(group.x, group.y, marker='o', linestyle='', ms=5, label=name)
+    #ax.legend()
+    
+    #plt.show()    
+    # create the line
+    
+    ax.plot([12, 30],[12, 30], 'r--', label='Random guess')
+   
+    # add labels, legend and make it nicer
+    ax.set_xlabel('noisy')
+    ax.set_ylabel('processed')
+    ax.set_title('PSNR scatter noisy vs. processed')
+    ax.set_xlim(19, 12)
+    ax.set_ylim(13, 28)
+   #ax.legend()
+    plt.tight_layout()
+    #plt.show()  
+    plt.savefig(f'{PLOTS_DIR}/graph/noise_processed_{NOISE_FORM}_{NOISE_STD}.png')
+# %%   
+if STORE_AVERAGE:
+    
+    #np.random.seed(1974)
+    
+    # Generate Data
+   
+    x=np.ndarray.flatten( scatter_wiener_ypred[:,:,0])
+    y=np.ndarray.flatten( scatter_wiener_ypred[:,:,1])
+    labels = np.ndarray.flatten(np.array([range(12),]*25).transpose())
+    df = pd.DataFrame(dict(x=x, y=y, label=labels))
+    
+    groups = df.groupby('label')
+    
+    # Plot
+    fig, ax = plt.subplots()
+    ax.margins(0.05) # Optional, just adds 5% padding to the autoscaling
+    for name, group in groups:
+        ax.plot(group.x, group.y, marker='o', linestyle='', ms=5, label=name)
+    #ax.legend()
+    
+    #plt.show()    
+    # create the line
+    
+    ax.plot([12, 30],[12, 30], 'r--', label='Random guess')
+   
+    # add labels, legend and make it nicer
+    ax.set_xlabel('wiener (baseline)')
+    ax.set_ylabel('processed')
+    ax.set_title('PSNR scatter weiner vs.processed')
+    ax.set_xlim(14, 25)
+    ax.set_ylim(13, 28)
+   #ax.legend()
+    plt.tight_layout()
+    #plt.show()  
+    plt.savefig(f'{PLOTS_DIR}/graph/wiener_processed_{NOISE_FORM}_{NOISE_STD}.png')
+    
+# %%
+if STORE_AVERAGE:
+    plt.close()
+    x = std_array
+    y1 = net_arr
+    y2=base_arr
+    plt.plot(x, y1,'-o',label='CNN')
+    plt.plot(x, y2,'-o',label='WEINER')
+    plt.legend()
+    plt.xlabel('STD NOISE')
+    plt.ylabel('PSNR')
+    plt.title(f'BLIND TRAINING\n{NOISE_FORM}')
+    plt.grid(True)
+    plt.savefig(f'{PLOTS_DIR}/graph/denoising_{NOISE_FORM}_{NOISE_STD}.png')
     

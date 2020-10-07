@@ -1,0 +1,19 @@
+{
+  "model": "DnCNN",
+  "batch_size": 16,
+  "train_data": "/home/andrea/denoiser/BSR/BSDS500/data/images/train",
+  "test_data": "/home/andrea/denoiser/BSR/BSDS500/data/images/test",
+  "sigma": 70,
+  "form": "GAUSS",
+  "blind": true,
+  "epochs": 500,
+  "lr": 0.001,
+  "wd": 0.0001,
+  "depth": 20,
+  "train_patch": 48,
+  "test_size": 180,
+  "format": "jpg",
+  "weights_path": "weights/gauss_20_test",
+  "model_path": "saved_models/gauss_20_test",
+  "exp_name": "gauss_test"
+}

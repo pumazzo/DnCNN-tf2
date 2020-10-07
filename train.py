@@ -17,19 +17,19 @@ parser.add_argument('--model', default='DnCNN', choices=['DnCNN', 'DnCNNRN'], ty
 parser.add_argument('--batch_size', default=16, type=int, help='batch size')
 parser.add_argument('--train_data', default='/home/andrea/denoiser/BSR/BSDS500/data/images/train', type=str, help='path of train data')
 parser.add_argument('--test_data', default='/home/andrea/denoiser/BSR/BSDS500/data/images/test', type=str, help='path of test data')
-parser.add_argument('--sigma', default=55, type=int, help='noise level (max level for blind mode)')
+parser.add_argument('--sigma', default=70, type=int, help='noise level (max level for blind mode)')
 parser.add_argument('--form', default='GAUSS', choices=['GAUSS', 'RICE'], type=str, help='choose a noise form')
 parser.add_argument('--blind', default=True, type=bool, help='blind denoising')
-parser.add_argument('--epochs', default=300, type=int, help='number of train epochs')
-parser.add_argument('--lr', default=0.0005, type=float, help='learning rate')
+parser.add_argument('--epochs', default=500, type=int, help='number of train epochs')
+parser.add_argument('--lr', default=0.001, type=float, help='learning rate')
 parser.add_argument('--wd', default=0.0001, type=float, help='weight decay')
 parser.add_argument('--depth', default=20, type=int, help='depth of the model')
-parser.add_argument('--train_patch', default=50, type=int, help='size for training patches')
+parser.add_argument('--train_patch', default=48, type=int, help='size for training patches')
 parser.add_argument('--test_size', default=180, type=int, help='size for test images')
 parser.add_argument('--format', default='jpg', choices=['jpg', 'png'], type=str, help='image format')
-parser.add_argument('--weights_path', default='weights/gauss_test', type=str, help='path for saving model weights')
-parser.add_argument('--model_path', default='saved_models/gauss_test', type=str, help='path for saving whole model')
-parser.add_argument('--exp_name', default='test', type=str, help='name for experiment logs')
+parser.add_argument('--weights_path', default='weights/gauss_20_test', type=str, help='path for saving model weights')
+parser.add_argument('--model_path', default='saved_models/gauss_20_test', type=str, help='path for saving whole model')
+parser.add_argument('--exp_name', default='gauss_test', type=str, help='name for experiment logs')
 
 args = parser.parse_args()
 print("parsed options")
@@ -144,7 +144,7 @@ def augment_test(image):
     
     std = NOISE_STD  # random.randint(0, 55) for blind denoising
     if BLIND_MODE:
-        std = random.randint(25, NOISE_STD) #for blind denoising
+        std = random.randint(35, NOISE_STD) #for blind denoising
     noisy_image = add_noise(image,TEST_DIM,NOISE_FORM,std)
 
     return noisy_image, image
@@ -169,12 +169,17 @@ def train_step(images, targets):
         predictions = model(images, training=True)
         loss = loss_object(targets, predictions)
         predictions = tf.clip_by_value(predictions, 0, 1)
-        metric = tf.image.psnr(predictions, targets, max_val=1.0)
+        metric_psnr = tf.image.psnr(predictions, targets, max_val=1.0)
+        metric = patch_mean_train(predictions, targets)
     gradients = tape.gradient(loss, model.trainable_variables)
     optimizer.apply_gradients(zip(gradients, model.trainable_variables))
 
     train_loss(loss)
-    train_metric(metric)
+    train_metric_mean_patch(metric)
+    train_metric_psnr(metric_psnr)
+    #optimizer._decayed_lr(tf.float32)
+   # with summary_writer.as_default():  NON FUNGE
+    #    tf.summary.scalar('learning_rate', optimizer._decayed_lr(tf.float32), step=train_step_count)
 
 
 @tf.function
@@ -184,10 +189,25 @@ def test_step(images, targets):
     predictions = model(images, training=False)
     t_loss = loss_object(targets, predictions)
     predictions = tf.clip_by_value(predictions, 0, 1)
-    t_metric = tf.image.psnr(predictions, targets, max_val=1.0)
+    t_metric_psnr = tf.image.psnr(predictions, targets, max_val=1.0)
+    t_metric = patch_mean_train(predictions, targets)
 
     test_loss(t_loss)
-    test_metric(t_metric)
+    test_metric_mean_patch(t_metric)
+    test_metric_psnr(t_metric_psnr)
+
+
+@tf.function
+def loss(model,x,y,training):
+    # training=training is needed only if there are layers with different
+  # behavior during training versus inference (e.g. Dropout).
+  y_ = model(x, training=training)
+  return loss_object(y_true=y, y_pred=y_)
+
+def patch_mean_train(y_true, y_pred):
+    #tf.math.square(tf.math.reduce_mean(y_true)-tf.math.reduce_mean(y_true))
+    #mean of a patch 
+    return tf.math.square(tf.math.reduce_mean(y_true,[1,2])-tf.math.reduce_mean(y_pred,[1,2]))
 
 
 # Load train and test set
@@ -203,26 +223,59 @@ elif MODEL == 'DnCNNRN':
     model = DnCNNRN(depth=DEPTH)
 
 loss_object = MeanSquaredError()
-optimizer = tfa.optimizers.AdamW(weight_decay=WEIGHT_DECAY, learning_rate=LEARNING_RATE)
+# second argument is a list not an array!
+schedule_lr = tf.optimizers.schedules.PiecewiseConstantDecay(list(map(lambda x : EPOCHS*x,[7,11])), list(map(lambda x : LEARNING_RATE*x,[1e-0, 1e-1, 1e-2])))# second argument is a list not an array!
+schedule_w =  tf.optimizers.schedules.PiecewiseConstantDecay(list(map(lambda x : EPOCHS*x,[7,11])), list(map(lambda x : WEIGHT_DECAY *x,[1e-0, 1e-1, 1e-2])))
+#schedule_lr=tf.optimizers.schedules.PolynomialDecay(1e-3, 1300, 1e-5, 2)
+#schedule_w=tf.optimizers.schedules.PolynomialDecay(1e-4, 1300, 1e-6, 2)
+# lr and wd can be a function or a tensor
+# lr = LEARNING_RATE * schedule(epoch)
+# wd = lambda: WEIGHT_DECAY * schedule(epoch)
+
+# # ...
+
+# optimizer = tfa.optimizers.AdamW(learning_rate=lr, weight_decay=wd)
+
+#optimizer = tfa.optimizers.AdamW(weight_decay=WEIGHT_DECAY, learning_rate=LEARNING_RATE)
 
 # these objects keep track of losses and metrics
 train_loss = tf.keras.metrics.Mean(name='train_loss')
-train_metric = tf.keras.metrics.Mean(name='train_metric')
+train_metric_mean_patch = tf.keras.metrics.Mean(name='train_mean_patch')
+train_metric_psnr = tf.keras.metrics.Mean(name='train_psnr')
 test_loss = tf.keras.metrics.Mean(name='test_loss')
-test_metric = tf.keras.metrics.Mean(name='test_metric')
+test_metric_mean_patch = tf.keras.metrics.Mean(name='test_mean_patch')
+test_metric_psnr = tf.keras.metrics.Mean(name='test_psnr')
 
 # Set tensorflow dir for the experiment
 current_time = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
 log_dir = 'logs/' + current_time + '_' + EXPERIMENT_NAME
 summary_writer = tf.summary.create_file_writer(log_dir)
+train_step_count = 0
+
+#lr = LEARNING_RATE * schedule(epoch)
+#wd = lambda: WEIGHT_DECAY * schedule(epoch)
+#lr = LEARNING_RATE * schedule(step)
+#wd = lambda: WEIGHT_DECAY * schedule(step)
+optimizer = tfa.optimizers.AdamW(learning_rate=schedule_lr, weight_decay=schedule_w)
 
 for epoch in range(EPOCHS):
+    #step = tf.Variable(epoch, trainable=False)
+    #lr = LEARNING_RATE * schedule(step)
+    #wd = lambda: WEIGHT_DECAY * schedule(step)
+    #step=step+1;
+
+# ...
+
+   # optimizer = tfa.optimizers.AdamW(learning_rate=lr, weight_decay=wd)
     print("On epoch %d / %d" % (epoch,EPOCHS))
     # Reset the metrics at the start of the next epoch
     train_loss.reset_states()
-    train_metric.reset_states()
+    train_metric_mean_patch.reset_states()
+    train_metric_psnr.reset_states()
     test_loss.reset_states()
-    test_metric.reset_states()
+    test_metric_psnr.reset_states()
+    test_metric_mean_patch.reset_states()
+
 
     # training loop
     for images, targets in train_ds:
@@ -236,12 +289,22 @@ for epoch in range(EPOCHS):
     
     with summary_writer.as_default():
         tf.summary.scalar('train_loss', train_loss.result(), step=epoch)
-        tf.summary.scalar('train_psnr', train_metric.result(), step=epoch)
+        tf.summary.scalar('train_patch_mean', train_metric_mean_patch.result(), step=epoch)
+        tf.summary.scalar('train_psnr', train_metric_psnr.result(), step=epoch)
         tf.summary.scalar('test_loss', test_loss.result(), step=epoch)
-        tf.summary.scalar('test_psnr', test_metric.result(), step=epoch)
+        tf.summary.scalar('test_patch_mean', test_metric_mean_patch.result(), step=epoch)
+        tf.summary.scalar('test_psnr', test_metric_psnr.result(), step=epoch)
+        tf.summary.scalar('learning_rate', optimizer._decayed_lr(tf.float32),step=epoch)
 
 # need weights to load the model for inference
 model.save_weights(WEIGHTS_PATH)
 
+
+
 # need whole model for post-training quantization
 model.save(MODEL_PATH)
+#save config file
+import json
+
+with open(MODEL_PATH+'/commandline_args.txt', 'w') as f:
+    json.dump(args.__dict__, f, indent=2)

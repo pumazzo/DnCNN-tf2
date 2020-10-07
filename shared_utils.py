@@ -20,6 +20,7 @@ def add_noise(image,dim,NOISE_FORM,NOISE_STD):
     if NOISE_FORM == 'GAUSS':
         noisy_image = tf.clip_by_value(image + noise, 0, 1)
     elif NOISE_FORM == 'RICE' :
-        noisy_image = tf.clip_by_value(tf.math.sqrt(tf.math.square(image) + tf.math.square(noise)), 0, 1)
+        noise2 = gaussian_noise_layer(dim,NOISE_STD)
+        noisy_image = tf.clip_by_value(tf.math.sqrt(tf.math.square(image + noise) + tf.math.square(noise2)), 0, 1)
    
     return noisy_image

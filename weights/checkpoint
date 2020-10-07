@@ -1,2 +1,2 @@
-model_checkpoint_path: "gauss_test"
-all_model_checkpoint_paths: "gauss_test"
+model_checkpoint_path: "gauss_20_test"
+all_model_checkpoint_paths: "gauss_20_test"
